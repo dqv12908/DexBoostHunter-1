@@ -1,12 +1,16 @@
-import sqlite3 from "sqlite3";
-import { open } from "sqlite";
+import Database from 'better-sqlite3';
 import { config } from "./config";
 import { boostAmounts, TokenResponseType, updatedDetailedTokenType } from "./types";
 
+// Helper function to get database connection
+function getDatabase(): Database {
+  return new Database(config.settings.db_name_tracker);
+}
+
 // Tokens
-export async function createTokensTable(database: any): Promise<boolean> {
+export async function createTokensTable(database: Database): Promise<boolean> {
   try {
-    await database.exec(`
+    database.exec(`
       CREATE TABLE IF NOT EXISTS tokens (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         url TEXT NOT NULL,
@@ -37,165 +41,107 @@ export async function createTokensTable(database: any): Promise<boolean> {
     return false;
   }
 }
+
 export async function selectAllTokens() {
-  const db = await open({
-    filename: config.settings.db_name_tracker,
-    driver: sqlite3.Database,
-  });
+  const db = getDatabase();
 
-  // Create Table if not exists
-  const tokensTableExist = await createTokensTable(db);
-  if (!tokensTableExist) {
-    await db.close();
-  }
+  try {
+    // Create Table if not exists
+    const tokensTableExist = await createTokensTable(db);
+    if (!tokensTableExist) {
+      db.close();
+      return;
+    }
 
-  // Proceed with returning tokens
-  if (tokensTableExist) {
-    const tokens = await db.all("SELECT * FROM tokens");
-    await db.close();
+    // Proceed with returning tokens
+    const tokens = db.prepare("SELECT * FROM tokens").all();
     return tokens;
+  } finally {
+    db.close();
   }
 }
+
 export async function upsertTokenBoost(token: updatedDetailedTokenType): Promise<boolean> {
-  const db = await open({
-    filename: config.settings.db_name_tracker,
-    driver: sqlite3.Database,
-  });
+  const db = getDatabase();
 
-  // Create Table if not exists
-  const tokensTableExist = await createTokensTable(db);
-  if (!tokensTableExist) {
-    await db.close();
-    return false;
-  }
+  try {
+    // Create Table if not exists
+    const tokensTableExist = await createTokensTable(db);
+    if (!tokensTableExist) {
+      return false;
+    }
 
-  // Proceed with adding/updating token record
-  if (tokensTableExist) {
     const {
-      chainId,
-      description,
-      dexPair,
-      header,
-      icon,
-      links,
-      openGraph,
-      tokenAddress,
-      tokenName,
-      tokenSymbol,
-      url,
-      amount,
-      currentPrice,
-      liquidity,
-      marketCap,
-      pairCreatedAt,
-      pairsAvailable,
-      totalAmount,
+      chainId, description, dexPair, header, icon, links,
+      openGraph, tokenAddress, tokenName, tokenSymbol, url,
+      amount, currentPrice, liquidity, marketCap,
+      pairCreatedAt, pairsAvailable, totalAmount,
     } = token;
 
     // Delete token to make room for new one
-    await db.run(`DELETE FROM tokens WHERE tokenAddress = ?`, [tokenAddress]);
+    db.prepare(`DELETE FROM tokens WHERE tokenAddress = ?`).run(tokenAddress);
 
     // Create timestamp for token profile creation
     const recordAdded = Date.now();
+    const linksLength = links ? links.length : 0;
 
-    // Get links lenght
-    const linksLenght = links ? links.length : 0;
-
-    const result = await db.run(
-      `INSERT INTO tokens (url, chainId, tokenAddress, icon, header, openGraph, description, totalAmount, amount, links, created, boosted, pairsAvailable, dexPair, currentPrice, liquidity, marketCap, pairCreatedAt, tokenName, tokenSymbol) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-      [
-        url,
-        chainId,
-        tokenAddress,
-        icon,
-        header,
-        openGraph,
-        description,
-        totalAmount,
-        amount,
-        linksLenght,
-        recordAdded,
-        recordAdded,
-        pairsAvailable,
-        dexPair,
-        currentPrice,
-        liquidity,
-        marketCap,
-        pairCreatedAt,
-        tokenName,
-        tokenSymbol,
-      ]
+    const result = db.prepare(`
+      INSERT INTO tokens (
+        url, chainId, tokenAddress, icon, header, openGraph, 
+        description, totalAmount, amount, links, created, 
+        boosted, pairsAvailable, dexPair, currentPrice, 
+        liquidity, marketCap, pairCreatedAt, tokenName, tokenSymbol
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    `).run(
+      url, chainId, tokenAddress, icon, header, openGraph,
+      description, totalAmount, amount, linksLength, recordAdded,
+      recordAdded, pairsAvailable, dexPair, currentPrice,
+      liquidity, marketCap, pairCreatedAt, tokenName, tokenSymbol
     );
 
-    // Return false if no record was added
-    if (typeof result.changes === "number" && result.changes < 1) return false;
-
-    // Close Database
-    await db.close();
-
-    return true;
+    return result.changes > 0;
+  } finally {
+    db.close();
   }
-
-  // Return false if tokensTableExist does not satisfy
-  return false;
 }
+
 export async function selectTokenPresent(token: string): Promise<boolean> {
-  const db = await open({
-    filename: config.settings.db_name_tracker,
-    driver: sqlite3.Database,
-  });
+  const db = getDatabase();
 
-  // Create Table if not exists
-  const tokensTableExist = await createTokensTable(db);
-  if (!tokensTableExist) {
-    await db.close();
-    return false;
-  }
-
-  // Return result
-  if (tokensTableExist) {
-    // Check if this token
-    const tokenExists = await db.get(`SELECT id FROM tokens WHERE tokenAddress = ?`, [token]);
-
-    // Close Database
-    await db.close();
-
-    if (tokenExists) return true;
-  }
-
-  // Return false token does not exist
-  return false;
-}
-export async function selectTokenBoostAmounts(token: string): Promise<false | boostAmounts> {
-  const db = await open({
-    filename: config.settings.db_name_tracker,
-    driver: sqlite3.Database,
-  });
-
-  // Create Table if not exists
-  const tokensTableExist = await createTokensTable(db);
-  if (!tokensTableExist) {
-    await db.close();
-    return false;
-  }
-
-  // Return result
-  if (tokensTableExist) {
-    // Check if this token
-    const tokenAmounts = await db.get(`SELECT amount, totalAmount FROM tokens WHERE tokenAddress = ?`, [token]);
-
-    // Close Database
-    await db.close();
-
-    // Return amounts
-    if (tokenAmounts) {
-      const amount = tokenAmounts.amount ? tokenAmounts.amount : 0;
-      const amountTotal = tokenAmounts.totalAmount ? tokenAmounts.totalAmount : 0;
-      return { amount: amount, amountTotal: amountTotal };
+  try {
+    // Create Table if not exists
+    const tokensTableExist = await createTokensTable(db);
+    if (!tokensTableExist) {
+      return false;
     }
-  }
 
-  // Return false token does not exist
-  return false;
+    const tokenExists = db.prepare(`SELECT id FROM tokens WHERE tokenAddress = ?`).get(token);
+    return !!tokenExists;
+  } finally {
+    db.close();
+  }
+}
+
+export async function selectTokenBoostAmounts(token: string): Promise<false | boostAmounts> {
+  const db = getDatabase();
+
+  try {
+    // Create Table if not exists
+    const tokensTableExist = await createTokensTable(db);
+    if (!tokensTableExist) {
+      return false;
+    }
+
+    const tokenAmounts = db.prepare(`SELECT amount, totalAmount FROM tokens WHERE tokenAddress = ?`).get(token);
+
+    if (tokenAmounts) {
+      const amount = tokenAmounts.amount ?? 0;
+      const amountTotal = tokenAmounts.totalAmount ?? 0;
+      return { amount, amountTotal };
+    }
+
+    return false;
+  } finally {
+    db.close();
+  }
 }
